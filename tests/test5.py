@@ -11,7 +11,7 @@ logger.setLevel(logging.INFO)
 CHUNK_SIZE = 100
 
 
-class FileReader(ActiveObject):
+class FileReaderChunked(ActiveObject):
     def __init__(self, fname: str, callback: Callable):
         super().__init__()
         self.callback = callback
@@ -43,36 +43,6 @@ class FileReader(ActiveObject):
         self.read()
 
 
-class FileReaderSync(ActiveObject):
-    def __init__(self, fname: str, callback: Callable):
-        super().__init__()
-        self.callback = callback
-
-        # Initialise
-        self.file = open(fname, "r")
-
-        # Start
-        while True:
-            self.set_active()
-            self.thread = Thread(target=self.process)
-            self.thread.start()
-            self.wait_for_completion()
-            if not self.data:
-                break
-
-        # Finish
-        self.file.close()
-
-    def process(self):
-        # Read the next chunk
-        self.data = self.file.read(CHUNK_SIZE)
-        self.complete()
-
-    def run(self):
-        # Notify the consumer about the next chunk of data, empty indicates it's finished
-        self.callback(self.data)
-
-
 class FileReaderContinuous(ActiveObject):
     def __init__(self, fname: str, callback: Callable):
         super().__init__()
@@ -93,7 +63,7 @@ class FileReaderContinuous(ActiveObject):
             self.complete()
             if not self.data:
                 break
-            self.wait_for_active()
+            # self.wait_for_active()
 
     def run(self):
         # Notify the consumer about the next chunk of data, empty indicates it's finished
@@ -138,11 +108,7 @@ def notify_contents(contents: str):
 
 
 # Non-blocking
-consumer = FileConsumer(FileReader, fname, notify_contents)
-consumer.start()
-
-# Blocking
-consumer = FileConsumer(FileReaderSync, fname, notify_contents)
+consumer = FileConsumer(FileReaderChunked, fname, notify_contents)
 consumer.start()
 
 # Non-blocking

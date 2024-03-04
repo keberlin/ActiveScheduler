@@ -25,10 +25,7 @@ class ActiveScheduler:
     def start(self):
         while True:
             # If all active objects are idle then quit
-            if (
-                all(ao.ao_status == ActiveObjectState.IDLE for ao in self.aobjects)
-                and not self.timers
-            ):
+            if all(ao.ao_status == ActiveObjectState.IDLE for ao in self.aobjects) and not self.timers:
                 break
             self.process()
 
@@ -41,15 +38,10 @@ class ActiveScheduler:
             logging.debug("waiting for activity...")
             self.timers.sort(key=lambda x: x.expiry)
             now = datetime.utcnow()
-            timeout = (
-                (self.timers[0].expiry - now).total_seconds() if self.timers else None
-            )
+            timeout = (self.timers[0].expiry - now).total_seconds() if self.timers else None
             with self.cond:
                 self.cond.wait(timeout)
-            assert (
-                any(ao.ao_status == ActiveObjectState.COMPLETED for ao in self.aobjects)
-                or self.timers
-            )
+            assert any(ao.ao_status == ActiveObjectState.COMPLETED for ao in self.aobjects) or self.timers
         # Go through all timers and see if any have expired
         now = datetime.utcnow()
         for timer in self.timers[:]:
@@ -89,6 +81,7 @@ class ActiveObject:
         """This will always be called within the main-thread."""
         logging.debug(f"running {self}")
         self.run()
+        self.lock.set()
 
     def run(self):
         """This will always be called within the main-thread."""
@@ -97,12 +90,9 @@ class ActiveObject:
     def set_active(self):
         """This must be called within the main-thread."""
         assert self.ao_status == ActiveObjectState.IDLE, f"{self} is not idle"
-        assert (
-            current_thread().ident == scheduler.thread_ident
-        ), f"{self} set_active being called on a sub-thread"
+        assert current_thread().ident == scheduler.thread_ident, f"{self} set_active being called on a sub-thread"
         logging.debug(f"setting {self} active")
         self.ao_status = ActiveObjectState.ACTIVE
-        self.lock.set()
 
     def complete(self):
         """This may be called within a sub-thread."""
@@ -112,25 +102,8 @@ class ActiveObject:
         self.lock.clear()
         with scheduler.cond:
             scheduler.cond.notify_all()
-
-    def wait_for_active(self):
-        assert (
-            current_thread().ident != scheduler.thread_ident
-        ), f"{self} wait_for_active being called on the main thread"
-        # Wait for this AO to be active again
-        self.lock.wait()
-
-    def wait_for_completion(self):
-        """This must be called within the main-thread."""
-        assert self.ao_status != ActiveObjectState.IDLE, f"{self} is idle"
-        assert (
-            current_thread().ident == scheduler.thread_ident
-        ), f"{self} wait_for_completion being called on a sub-thread"
-        # Wait for this AO to no longer be active
-        while True:
-            scheduler.process()
-            if not self.is_active():
-                break
+        if current_thread().ident != scheduler.thread_ident:
+            self.lock.wait()
 
 
 class ActiveTimer:
