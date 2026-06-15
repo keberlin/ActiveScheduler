@@ -1,7 +1,7 @@
 import logging
 from time import sleep
 
-from ..activescheduler import ActiveThread, scheduler
+from activescheduler import ActiveThread, scheduler
 
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
@@ -12,7 +12,7 @@ def move_scara(seconds: float):
     sleep(seconds)
 
 
-ActiveThread(move_scara, 3)
+ActiveThread(move_scara, 2)
 
 
 scheduler.start()

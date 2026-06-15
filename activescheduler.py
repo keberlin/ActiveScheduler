@@ -2,7 +2,13 @@ import logging
 from datetime import datetime, timedelta
 from enum import Enum
 from threading import Condition, Event, Thread, current_thread
-from typing import Callable, List
+from typing import Any, Callable, List
+
+logger = logging.getLogger()
+
+#
+# Active Scheduler
+#
 
 
 class ActiveObjectState(Enum):
@@ -29,6 +35,11 @@ class ActiveScheduler:
                 break
             self.process()
 
+    def notify(self):
+        logging.debug("notifying...")
+        with self.cond:
+            self.cond.notify_all()
+
     def process(self):
         # See if there are any active objects that have completed
         if not any(ao.ao_status == ActiveObjectState.COMPLETED for ao in self.aobjects):
@@ -36,33 +47,45 @@ class ActiveScheduler:
             if self.dump:
                 self.dump()
             logging.debug("waiting for activity...")
-            self.timers.sort(key=lambda x: x.expiry)
+            self.timers.sort(key=lambda x: x.expiry)  # TODO: Just get closest expiry time
             now = datetime.utcnow()
             timeout = (self.timers[0].expiry - now).total_seconds() if self.timers else None
             with self.cond:
                 self.cond.wait(timeout)
-            assert any(ao.ao_status == ActiveObjectState.COMPLETED for ao in self.aobjects) or self.timers
         # Go through all timers and see if any have expired
+        # TODO: Get highest priority completed AO
+        # TODO: Only run timers and AOs with this priority
         now = datetime.utcnow()
-        for timer in self.timers[:]:
+        for timer in self.timers:
             if timer.expiry <= now:
-                self.timers.remove(timer)
                 timer._run()
         # Go through all active objects and process any completed ones
         for ao in self.aobjects:
             if ao.ao_status == ActiveObjectState.COMPLETED:
-                ao.ao_status = ActiveObjectState.IDLE
                 ao._run()
 
 
 scheduler = ActiveScheduler()
 
 
+#
+# Active Objects
+#
 class ActiveObject:
-    def __init__(self):
-        self.ao_status = ActiveObjectState.IDLE
-        scheduler.aobjects.append(self)
+    def __init__(self, priority=10):
+        self.priority = priority
+
+        self.ao_status = ActiveObjectState.ACTIVE  # Set to Active by default
         self.lock = Event()
+        scheduler.aobjects.append(self)
+
+    def __del__(self):
+        logging.debug(f"deleting ActiveObject {self}")
+        try:
+            scheduler.aobjects.remove(self)
+        except ValueError:
+            logging.debug(f"ActiveObject {self} already removed!")
+        scheduler.notify()
 
     def is_idle(self):
         return self.ao_status == ActiveObjectState.IDLE
@@ -71,74 +94,43 @@ class ActiveObject:
         return self.ao_status == ActiveObjectState.ACTIVE
 
     def cancel(self):
+        """This may be called within a sub-thread."""
+        logging.debug(f"cancelling ActiveObject {self}")
         self.ao_status = ActiveObjectState.IDLE
+        scheduler.notify()
 
     def delete(self):
-        scheduler.aobjects.remove(self)
+        self.cancel()
         del self
 
     def _run(self):
         """This will always be called within the main-thread."""
-        logging.debug(f"running {self}")
-        self.run()
+        assert self.ao_status == ActiveObjectState.COMPLETED, f"{self} is not active"
+        self.ao_status = ActiveObjectState.ACTIVE
+        logging.debug(f"running ActiveObject {self}")
+        self.run(self.payload)
         self.lock.set()
 
-    def run(self):
+    def run(self, payload: Any):
         """This will always be called within the main-thread."""
         assert False, "You need to define a run() function in your sub-class"
 
     def set_active(self):
-        """This must be called within the main-thread."""
+        """This may be called within a sub-thread."""
         assert self.ao_status == ActiveObjectState.IDLE, f"{self} is not idle"
-        assert current_thread().ident == scheduler.thread_ident, f"{self} set_active being called on a sub-thread"
-        logging.debug(f"setting {self} active")
+        logging.debug(f"setting ActiveObject {self} active")
         self.ao_status = ActiveObjectState.ACTIVE
 
-    def complete(self):
+    def complete(self, payload: Any = None):
         """This may be called within a sub-thread."""
         assert self.ao_status == ActiveObjectState.ACTIVE, f"{self} is not active"
-        logging.debug(f"completing {self}")
-        self.ao_status = ActiveObjectState.COMPLETED
+        logging.debug(f"completing ActiveObject{self}")
         self.lock.clear()
-        with scheduler.cond:
-            scheduler.cond.notify_all()
+        self.ao_status = ActiveObjectState.COMPLETED
+        self.payload = payload
         if current_thread().ident != scheduler.thread_ident:
+            scheduler.notify()
             self.lock.wait()
-
-
-class ActiveTimer:
-    def __init__(self, timeout: timedelta, func: Callable, *nargs, **kwargs):
-        self.func = func
-        self.nargs = nargs
-        self.kwargs = kwargs
-        now = datetime.utcnow()
-        self.expiry = now + timeout
-        scheduler.timers.append(self)
-
-    def delete(self):
-        scheduler.timers.remove(self)
-        del self
-
-    def _run(self):
-        """This will always be called within the main-thread."""
-        if self.func:
-            self.func(*self.nargs, **self.kwargs)
-        del self
-
-
-class ActivePeriodicTimer(ActiveTimer):
-    def __init__(self, timeout: timedelta, func=None, *nargs, **kwargs):
-        super().__init__(timeout, func, *nargs, **kwargs)
-        self.period = timeout
-
-    def _run(self):
-        """This will always be called within the main-thread."""
-        self.expiry += self.period
-        scheduler.timers.append(self)
-        if self.func:
-            self.func(*self.nargs, **self.kwargs)
-        else:
-            self.run()
 
 
 class ActiveThread(ActiveObject):
@@ -151,12 +143,66 @@ class ActiveThread(ActiveObject):
         self.func = func
         self.nargs = nargs
         self.kwargs = kwargs
+
         thread = Thread(target=self.process)
         thread.start()
-        self.set_active(wait=True)
         thread.join()
         self.delete()
 
-    def _run(self):
+    def run(self, payload: Any):
         """This will always be called within the main-thread."""
         pass
+
+
+#
+# Active Timers
+#
+
+
+class ActiveTimer:
+    def __init__(self, timeout: timedelta, func: Callable, *nargs, **kwargs):
+        self.func = func
+        self.nargs = nargs
+        self.kwargs = kwargs
+
+        now = datetime.utcnow()
+        self.expiry = now + timeout
+        scheduler.timers.append(self)
+
+    def __del__(self):
+        logging.debug(f"deleting ActiveTimer {self}")
+        try:
+            scheduler.timers.remove(self)
+        except ValueError:
+            logging.debug(f"ActiveTimer {self} already removed!")
+
+    def delete(self):
+        del self
+
+    def _run(self):
+        """This will always be called within the main-thread."""
+        logging.debug(f"running ActiveTimer {self}")
+        if self.func:
+            self.func(*self.nargs, **self.kwargs)
+        else:
+            self.run()
+        try:
+            scheduler.timers.remove(self)
+        except ValueError:
+            logging.debug(f"ActiveTimer {self} already removed!")
+
+
+class ActivePeriodicTimer(ActiveTimer):
+    def __init__(self, timeout: timedelta, func=None, *nargs, **kwargs):
+        super().__init__(timeout, func, *nargs, **kwargs)
+
+        self.period = timeout
+
+    def _run(self):
+        """This will always be called within the main-thread."""
+        logging.debug(f"running ActivePeriodicTimer {self}")
+        if self.func:
+            self.func(*self.nargs, **self.kwargs)
+        else:
+            self.run()
+        self.expiry += self.period
