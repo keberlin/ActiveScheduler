@@ -1,0 +1,18 @@
+[project]
+name = "koenig"
+version = "0.1"
+authors = [
+  {name = "Keith Eberlin", email = "keith.eberlin.uk@gmail.com"}
+]
+maintainers = [
+  {name = "Keith Eberlin", email = "keith.eberlin.uk@gmail.com"}
+]
+description = "Koenig RTOS event-driven messaging framework."
+readme = "README.md"
+requires-python = ">= 3.0"
+dynamic = ["version"]
+keywords = ["RTOS", "symbian", "messaging", "event-driven", "signalling", "multi-threading", "Kafka", "RabbitMQ"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -7,6 +7,11 @@ logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
 
 
+class MyActiveTimer(ActiveTimer):
+    def run(self):
+        logging.info(f"MyActiveTimer has fired..")
+
+
 class MyPeriodicTimer(ActivePeriodicTimer):
     def __init__(self, timeout: timedelta):
         super().__init__(timeout)
@@ -14,27 +19,15 @@ class MyPeriodicTimer(ActivePeriodicTimer):
         self.count = 0
 
     def run(self):
-        logging.info(f"MyPeriodicTimer ({self.count}) has fired..")
         self.count += 1
+        logging.info(f"MyPeriodicTimer has fired with count {self.count}..")
+        if self.count >= 5:
+            self.cancel()
 
 
-def timer_func():
-    logging.info("my_timer_func has fired..")
-
-
-count = 0
-
-
-def periodic_timer_func():
-    global count
-    logging.info(f"periodic_timer_func ({count}) has fired..")
-    count += 1
-    if count > 5:
-        exit(0)
-
-
-ActiveTimer(timedelta(seconds=3), timer_func)
-ActivePeriodicTimer(timedelta(seconds=2), periodic_timer_func)
-MyPeriodicTimer(timedelta(seconds=1))
+timers = []
+timers.append(MyActiveTimer(timedelta(seconds=3)))
+for i in range(4):
+    timers.append(MyPeriodicTimer(timedelta(seconds=1)))
 
 scheduler.start()

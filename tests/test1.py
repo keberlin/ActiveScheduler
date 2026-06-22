@@ -2,10 +2,11 @@ from multiprocessing import Lock
 from random import randint
 from threading import Thread, current_thread
 from time import sleep
+from typing import Callable
 
 
-def thread_safe(lock):
-    def func_wrapper(func):
+def thread_safe(lock: Lock):
+    def func_wrapper(func: Callable):
         def wrapper(*args, **kwargs):
             lock.acquire()  # this will block until the mutex lock has been acquired
             ret = func(*args, **kwargs)
