@@ -12,7 +12,8 @@ def move_scara(seconds: float):
     sleep(seconds)
 
 
-ActiveThread(move_scara, 2)
+if __name__ == "__main__":
 
+    ActiveThread(move_scara, 2)
 
-scheduler.start()
+    scheduler.start()

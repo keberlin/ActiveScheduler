@@ -6,6 +6,8 @@ from activescheduler import ActiveObject, scheduler
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
 
+PATH = os.path.dirname(__file__)
+
 CHUNK_SIZE = 100
 
 
@@ -29,25 +31,24 @@ class FileReaderNonBlocking(ActiveObject):
             return
         self.complete(data)
 
-    def run(self, data: str):
-        self.contents += data
+    def run(self):
+        self.contents += self.payload
 
         # Next chunk
         self.read()
 
 
-FNAME = "data.txt"
+if __name__ == "__main__":
 
-path = os.path.dirname(__file__)
-fname = os.path.join(path, FNAME)
+    FNAME = "data.txt"
 
+    fname = os.path.join(PATH, FNAME)
 
-# Non-blocking
-reader = FileReaderNonBlocking(fname)
+    # Non-blocking
+    reader = FileReaderNonBlocking(fname)
 
+    scheduler.start()
 
-scheduler.start()
-
-# Check that the reader has read the entire contents of fname
-with open(fname, "r") as f:
-    assert reader.contents == f.read()
+    # Check that the reader has read the entire contents of fname
+    with open(fname, "r") as f:
+        assert reader.contents == f.read()

@@ -11,28 +11,31 @@ logger = logging.getLogger()
 #
 
 
-class ActiveObject:
+class ActiveBase:
     pass
 
 
-class AONotifier:
-    def notify_set_active(self, ao: ActiveObject):
+class ActiveNotifier:
+    def notify_set_active(self, ao: ActiveBase):
         pass
 
-    def notify_cancel(self, ao: ActiveObject):
+    def notify_cancel(self, ao: ActiveBase):
         pass
 
-    def notify_prerun(self, ao: ActiveObject, data: Any = None):
+    def notify_prerun(self, ao: ActiveBase):
         pass
 
-    def notify_postrun(self, ao: ActiveObject, data: Any = None):
+    def notify_postrun(self, ao: ActiveBase):
         pass
 
 
-class AOState(Enum):
+class ActiveState(Enum):
     IDLE = "idle"
     ACTIVE = "active"
     COMPLETED = "completed"
+
+
+DEFAULT_PRIORITY = 10
 
 
 class ActiveScheduler:
@@ -49,7 +52,7 @@ class ActiveScheduler:
     def start(self):
         while True:
             # If all active objects are idle then quit
-            if all(ao.ao_status == AOState.IDLE for ao in self.aobjects) and not self.timers:
+            if all(ao.ao_status == ActiveState.IDLE for ao in self.aobjects) and not self.timers:
                 break
             self.process()
 
@@ -60,14 +63,18 @@ class ActiveScheduler:
 
     def process(self):
         # See if there are any active objects that have completed
-        if not any(ao.ao_status == AOState.COMPLETED for ao in self.aobjects):
+        if not any(ao.ao_status == ActiveState.COMPLETED for ao in self.aobjects):
             # Wait for an active object to fire
             if self.dump:
                 self.dump()
             logging.debug("waiting for activity...")
-            self.timers.sort(key=lambda x: x.expiry)  # TODO: Just get closest expiry time
-            now = datetime.utcnow()
-            timeout = (self.timers[0].expiry - now).total_seconds() if self.timers else None  # TODO: ensure not -ve
+            if self.timers:
+                expiry = min([v.expiry for v in self.timers])
+                now = datetime.utcnow()
+                timeout = (expiry - now).total_seconds()
+                timeout = max(timeout, 0)
+            else:
+                timeout = None
             with self.cond:
                 self.cond.wait(timeout)
         # Go through all timers and see if any have expired
@@ -76,41 +83,54 @@ class ActiveScheduler:
         now = datetime.utcnow()
         for timer in self.timers[:]:  # Take a copy of the list just in case timers get removed part way through
             if timer.expiry <= now:
+                timer.ao_status = ActiveState.COMPLETED
                 timer._run()
         # Go through all active objects and process any completed ones
         for ao in self.aobjects[:]:  # Take a copy of the list just in case AOs get removed part way through
-            if ao.ao_status == AOState.COMPLETED:
+            if ao.ao_status == ActiveState.COMPLETED:
                 ao._run()
 
 
 scheduler = ActiveScheduler()
 
 
-class AOBase:
-    def __init__(self, notifier: AONotifier = None, priority=10):
+class ActiveBase:
+    def __init__(self, notifier: ActiveNotifier = None, priority=10):
         self.notifier = notifier
         self.priority = priority
 
-        self.ao_status = AOState.ACTIVE  # Set to Active by default
+        self.ao_status = ActiveState.ACTIVE  # Set to Active by default
+
+    def _run(self):
+        """This will always be called within the main-thread."""
+        logging.debug(f"running ActiveBase {self}")
+        assert self.ao_status == ActiveState.COMPLETED, f"{self} is not active"
+        self.ao_status = ActiveState.ACTIVE
+
+        if self.notifier:
+            self.notifier.notify_prerun(self)
+        self.run()
+        if self.notifier:
+            self.notifier.notify_postrun(self)
 
     def is_idle(self):
-        return self.ao_status == AOState.IDLE
+        return self.ao_status == ActiveState.IDLE
 
     def is_active(self):
-        return self.ao_status == AOState.ACTIVE
+        return self.ao_status == ActiveState.ACTIVE
 
     def set_active(self):
         """This may be called within a sub-thread."""
-        assert self.ao_status == AOState.IDLE, f"{self} is not idle"
-        logging.debug(f"setting AOBase {self} active")
-        self.ao_status = AOState.ACTIVE
+        assert self.ao_status == ActiveState.IDLE, f"{self} is not idle"
+        logging.debug(f"setting ActiveBase {self} active")
+        self.ao_status = ActiveState.ACTIVE
         if self.notifier:
             self.notifier.notify_set_active(self)
 
     def cancel(self):
         """This may be called within a sub-thread."""
-        logging.debug(f"cancelling AOBase {self}")
-        self.ao_status = AOState.IDLE
+        logging.debug(f"cancelling ActiveBase {self}")
+        self.ao_status = ActiveState.IDLE
         if self.notifier:
             self.notifier.notify_cancel(self)
         scheduler.notify()
@@ -119,8 +139,8 @@ class AOBase:
 #
 # Active Objects
 #
-class ActiveObject(AOBase):
-    def __init__(self, notifier: AONotifier = None, priority=10):
+class ActiveObject(ActiveBase):
+    def __init__(self, notifier: ActiveNotifier = None, priority: int = DEFAULT_PRIORITY):
         super().__init__(notifier, priority)
 
         self.payload = None
@@ -133,15 +153,9 @@ class ActiveObject(AOBase):
 
     def _run(self):
         """This will always be called within the main-thread."""
-        assert self.ao_status == AOState.COMPLETED, f"{self} is not active"
-        self.ao_status = AOState.ACTIVE
         logging.debug(f"running ActiveObject {self}")
 
-        if self.notifier:
-            self.notifier.notify_prerun(self, self.payload)
-        self.run(self.payload)
-        if self.notifier:
-            self.notifier.notify_postrun(self, self.payload)
+        super()._run()
 
         self.lock.set()
 
@@ -155,10 +169,10 @@ class ActiveObject(AOBase):
 
     def complete(self, payload: Any = None):
         """This may be called within a sub-thread."""
-        assert self.ao_status == AOState.ACTIVE, f"{self} is not active"
+        assert self.ao_status == ActiveState.ACTIVE, f"{self} is not active"
         logging.debug(f"completing ActiveObject {self}")
         self.lock.clear()
-        self.ao_status = AOState.COMPLETED
+        self.ao_status = ActiveState.COMPLETED
         self.payload = payload
         if current_thread().ident != scheduler.thread_ident:
             scheduler.notify()
@@ -170,25 +184,21 @@ class ActiveObject(AOBase):
 
 
 class ActiveThread(ActiveObject):
-    def process(self):
-        self.func(*self.nargs, **self.kwargs)
-        self.complete()
 
-    def __init__(self, func: Callable, *nargs, **kwargs):
-        super().__init__()
+    def __init__(self, notifier: ActiveNotifier = None, priority: int = DEFAULT_PRIORITY):
+        super().__init__(notifier, priority)
 
-        self.func = func
-        self.nargs = nargs
-        self.kwargs = kwargs
+    def _process(self):
+        self.process()
 
-        thread = Thread(target=self.process)
-        thread.start()
-        thread.join()
-        self.delete()
+        self.cancel()
+        del self
 
-    def run(self, payload: Any):
-        """This will always be called within the main-thread."""
-        pass
+    def start(self):
+        # Create a new sub-thread
+        self.thread = Thread(target=self._process)
+        # Start _process() within this thread
+        self.thread.start()
 
 
 #
@@ -196,8 +206,8 @@ class ActiveThread(ActiveObject):
 #
 
 
-class ActivePeriodicTimer(AOBase):
-    def __init__(self, timeout: timedelta, notifier: AONotifier = None, priority=10):
+class ActivePeriodicTimer(ActiveBase):
+    def __init__(self, timeout: timedelta, notifier: ActiveNotifier = None, priority: int = DEFAULT_PRIORITY):
         super().__init__(notifier, priority)
 
         self.period = timeout
@@ -215,11 +225,7 @@ class ActivePeriodicTimer(AOBase):
         logging.debug(f"running ActivePeriodicTimer {self}")
         self.expiry += self.period
 
-        if self.notifier:
-            self.notifier.notify_prerun(self)
-        self.run()
-        if self.notifier:
-            self.notifier.notify_postrun(self)
+        super()._run()
 
     def cancel(self):
         logging.debug(f"cancelling ActivePeriodicTimer {self}")
@@ -239,8 +245,8 @@ class ActiveTimer(ActivePeriodicTimer):
     def _run(self):
         """This will always be called within the main-thread."""
         logging.debug(f"running ActiveTimer {self}")
+
         super()._run()
 
         self.cancel()
-
         del self

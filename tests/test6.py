@@ -1,29 +1,37 @@
 import logging
 import os
-from threading import Thread
+from time import sleep
 
-from activescheduler import ActiveObject, scheduler
+from activescheduler import ActiveNotifier, ActiveObject, ActiveThread, scheduler
 
 logger = logging.getLogger()
 logger.setLevel(logging.DEBUG)
 
+PATH = os.path.dirname(__file__)
+
 CHUNK_SIZE = 100
 
 
-class FileReaderBlocking(ActiveObject):
-    def __init__(self, fname: str):
-        super().__init__()
+class FileReaderBlocking(ActiveThread):
+
+    def __init__(self, fname: str, notifier: ActiveNotifier = None):
+        super().__init__(notifier)
 
         # Initialise
         self.file = open(fname, "r")
         self.contents = ""
 
-    def run(self, data: str):
+        # Kick off the process() function within a sub-thread
+        self.start()
+
+    def run(self):
         """This will always be called within the main-thread."""
-        self.contents += data
+        logging.info(f"FileReaderBlocking: has run..")
+        self.contents += self.payload
+        sleep(0.3)
 
     def process(self):
-        """Read the file contents in chunks."""
+        """Read the file contents using chunks within a sub-thread."""
 
         while True:
             # Read the next chunk
@@ -33,28 +41,17 @@ class FileReaderBlocking(ActiveObject):
             self.complete(data)  # This won't return until self.run() has been called
 
 
-FNAME = "data.txt"
+if __name__ == "__main__":
 
-path = os.path.dirname(__file__)
-fname = os.path.join(path, FNAME)
+    FNAME = "data.txt"
 
-# Setup active objects
-reader = FileReaderBlocking(fname)
+    fname = os.path.join(PATH, FNAME)
 
+    # Setup active objects
+    reader = FileReaderBlocking(fname)
 
-def run_blocking_task():
-    reader.process()
+    scheduler.start()
 
-    # Check that the reader has read the entire contents of fname
+    # Check that the reader has read the entire contents of FNAME
     with open(fname, "r") as f:
         assert reader.contents == f.read()
-
-    reader.cancel()
-
-
-# Create a new thread
-thread = Thread(target=run_blocking_task)
-# Start the thread
-thread.start()
-
-scheduler.start()
