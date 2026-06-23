@@ -21,8 +21,7 @@ class FileReaderBlocking(ActiveThread):
         self.file = open(fname, "r")
         self.contents = ""
 
-        # Kick off the process() function within a sub-thread
-        self.start()
+        # The ActiveThread automatically kicks off the process() function within a sub-thread
 
     def run(self):
         """This will always be called within the main-thread."""

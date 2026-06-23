@@ -139,6 +139,8 @@ class ActiveBase:
 #
 # Active Objects
 #
+
+
 class ActiveObject(ActiveBase):
     def __init__(self, notifier: ActiveNotifier = None, priority: int = DEFAULT_PRIORITY):
         super().__init__(notifier, priority)
@@ -181,24 +183,6 @@ class ActiveObject(ActiveBase):
     def run(self, payload: Any):
         """This will always be called within the main-thread."""
         assert False, "You need to define a run() function in your sub-class"
-
-
-class ActiveThread(ActiveObject):
-
-    def __init__(self, notifier: ActiveNotifier = None, priority: int = DEFAULT_PRIORITY):
-        super().__init__(notifier, priority)
-
-    def _process(self):
-        self.process()
-
-        self.cancel()
-        del self
-
-    def start(self):
-        # Create a new sub-thread
-        self.thread = Thread(target=self._process)
-        # Start _process() within this thread
-        self.thread.start()
 
 
 #
@@ -247,6 +231,46 @@ class ActiveTimer(ActivePeriodicTimer):
         logging.debug(f"running ActiveTimer {self}")
 
         super()._run()
+
+        self.cancel()
+        del self
+
+
+#
+# Utilities
+#
+
+
+class ActiveOneShotTimer(ActiveTimer):
+    def __init__(self, func: Callable, *args, **kwargs):
+        super().__init__(timedelta(0))
+
+        self.func = func
+        self.args = args
+        self.kwargs = kwargs
+
+    def run(self):
+        self.func(*self.args, **self.kwargs)
+
+
+class ActiveThread(ActiveObject):
+
+    def __init__(self, notifier: ActiveNotifier = None, priority: int = DEFAULT_PRIORITY):
+        super().__init__(notifier, priority)
+
+        # Automatically call the _start() function
+        self.timer = ActiveOneShotTimer(self._start)
+
+    def _start(self):
+        del self.timer
+
+        # Create a new sub-thread
+        self.thread = Thread(target=self._process)
+        # Start _process() within this thread
+        self.thread.start()
+
+    def _process(self):
+        self.process()
 
         self.cancel()
         del self
