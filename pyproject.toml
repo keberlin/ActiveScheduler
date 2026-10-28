@@ -1,16 +1,15 @@
 [project]
-name = "koenig"
-version = "0.1"
+name = "activescheduler"
+version = "0.1.0"
 authors = [
   {name = "Keith Eberlin", email = "keith.eberlin.uk@gmail.com"}
 ]
 maintainers = [
   {name = "Keith Eberlin", email = "keith.eberlin.uk@gmail.com"}
 ]
-description = "Koenig RTOS event-driven messaging framework."
+description = "Python event-driven active scheduler framework inspired by Symbian's active scheduler model."
 readme = "README.md"
-requires-python = ">= 3.0"
-dynamic = ["version"]
+requires-python = ">= 3.10"
 keywords = ["RTOS", "symbian", "messaging", "event-driven", "signalling", "multi-threading", "Kafka", "RabbitMQ"]
 
 [build-system]

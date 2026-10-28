@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta
 from enum import Enum
-from threading import Condition, Event, Thread, current_thread
+from threading import Condition, Thread, current_thread
 from typing import Any, Callable, List
 
 logger = logging.getLogger()
@@ -146,7 +146,8 @@ class ActiveObject(ActiveBase):
         super().__init__(notifier, priority)
 
         self.payload = None
-        self.lock = Event()
+        self._completion_token = 0
+        self._completed_token = 0
         scheduler.aobjects.append(self)
 
     def __del__(self):
@@ -157,9 +158,12 @@ class ActiveObject(ActiveBase):
         """This will always be called within the main-thread."""
         logging.debug(f"running ActiveObject {self}")
 
+        completion_token = self._completion_token
         super()._run()
 
-        self.lock.set()
+        with scheduler.cond:
+            self._completed_token = completion_token
+            scheduler.cond.notify_all()
 
     def cancel(self):
         logging.debug(f"cancelling ActiveObject {self}")
@@ -171,14 +175,20 @@ class ActiveObject(ActiveBase):
 
     def complete(self, payload: Any = None):
         """This may be called within a sub-thread."""
-        assert self.ao_status == ActiveState.ACTIVE, f"{self} is not active"
         logging.debug(f"completing ActiveObject {self}")
-        self.lock.clear()
-        self.ao_status = ActiveState.COMPLETED
-        self.payload = payload
-        if current_thread().ident != scheduler.thread_ident:
-            scheduler.notify()
-            self.lock.wait()
+
+        with scheduler.cond:
+            assert self.ao_status == ActiveState.ACTIVE, f"{self} is not active"
+            self._completion_token += 1
+            completion_token = self._completion_token
+            self.ao_status = ActiveState.COMPLETED
+            self.payload = payload
+
+            if current_thread().ident != scheduler.thread_ident:
+                scheduler.cond.notify_all()
+                scheduler.cond.wait_for(
+                    lambda: self._completed_token >= completion_token or self.ao_status == ActiveState.IDLE
+                )
 
     def run(self, payload: Any):
         """This will always be called within the main-thread."""

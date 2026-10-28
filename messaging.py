@@ -42,7 +42,7 @@ class Messaging(ActiveObject):
     def __init__(self):
         super().__init__()
         self.queue = Queue()
-        self.set_active()
+        #self.set_active()
 
     def run(self):
         """This will always be called within the main-thread."""
